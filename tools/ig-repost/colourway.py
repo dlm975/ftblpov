@@ -27,7 +27,7 @@ Match the original silhouette, panel seams, lacing, collar, logo geometry,
 material grain, studs, camera angle, background, lighting and shadows.
 Keep any hands, socks and other objects intact. Preserve existing watermarks.
 Use photorealistic material reflections. Keep the entire original composition
-within a square frame, extending the background as needed. No added typography.
+within the central 4:5 area of a portrait frame. Leave extra background above and below for the final crop. No added typography.
 If supplied, image two is the finished colour reference only."""
 
 
@@ -36,10 +36,13 @@ def source_urls(post):
     return [item["media_url"] for item in media if item.get("media_type") == "IMAGE" and item.get("media_url")][:10]
 
 
-def jpeg(data, max_size):
+def jpeg(data, max_size, *, portrait=False):
     with Image.open(io.BytesIO(data)) as photo:
         photo = ImageOps.exif_transpose(photo).convert("RGB")
-        photo.thumbnail((max_size, max_size))
+        if portrait:
+            photo = ImageOps.fit(photo, (max_size, max_size * 5 // 4), method=Image.Resampling.LANCZOS)
+        else:
+            photo.thumbnail((max_size, max_size))
         output = io.BytesIO()
         clean = Image.frombytes("RGB", photo.size, photo.tobytes())
         clean.save(output, format="JPEG", quality=94)
@@ -80,8 +83,8 @@ def generate(post):
         if reference:
             inputs.append(("colour-reference.jpg", reference, "image/jpeg"))
         result = client.images.edit(model="gpt-image-1.5", image=inputs, prompt=prompt,
-                                    input_fidelity="high", quality="high", size="1024x1024", output_format="jpeg")
-        generated = jpeg(base64.b64decode(result.data[0].b64_json, validate=True), 1080)
+                                    input_fidelity="high", quality="high", size="1024x1536", output_format="jpeg")
+        generated = jpeg(base64.b64decode(result.data[0].b64_json, validate=True), 1080, portrait=True)
         if reference is None:
             reference = generated
         key = "ftblpov/" + hashlib.sha256(generated).hexdigest() + ".jpg"
