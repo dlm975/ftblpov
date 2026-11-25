@@ -1,0 +1,83 @@
+name: FTBLPOV colourway packs
+
+# Publishes AI colourway concepts based on new @cleats photos every two hours.
+# Run it by hand from the Actions tab to repost specific post links.
+# What has been posted is remembered in state.json on the `ig-repost-state` branch.
+on:
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      links:
+        description: 'Post/reel links to repost (space-separated). Leave empty to repost the newest unposted posts.'
+        required: false
+        default: ''
+      max_posts:
+        description: 'Most posts to repost this run when no links are given'
+        required: false
+        default: '1'
+      dry_run:
+        description: 'Dry run: log what would be posted without posting'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write  # to save state.json to the ig-repost-state branch
+
+concurrency:
+  group: ig-repost
+  cancel-in-progress: false
+
+jobs:
+  repost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: tools/ig-repost
+    env:
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+      SOURCE_USERNAME: ${{ vars.IG_REPOST_SOURCE || 'cleats' }}
+      EXPECT_ACCOUNT: ${{ vars.IG_REPOST_TARGET || 'ftblpov' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install image workflow dependencies
+        run: python3 -m pip install -r requirements.txt
+      - name: Load publishing journal
+        id: journal
+        run: |
+          state_dir="$RUNNER_TEMP/pack-state"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          refs=$(git ls-remote --heads origin refs/heads/ig-repost-state)
+          if [[ -n "$refs" ]]; then
+            git fetch --depth=1 origin refs/heads/ig-repost-state
+            git worktree add --detach "$state_dir" FETCH_HEAD
+            test -s "$state_dir/state.json"
+          else
+            git worktree add --orphan -b ig-repost-state "$state_dir"
+            echo "seed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Generate and publish packs
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+          PACK_BUCKET: ${{ vars.PACK_BUCKET }}
+          LINKS: ${{ inputs.links }}
+          MAX_POSTS: ${{ inputs.max_posts }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SEED: ${{ steps.journal.outputs.seed }}
+          PUSH_PACK_STATE: "1"
+        run: |
+          state=(--state "$RUNNER_TEMP/pack-state/state.json")
+          read -ra links <<< "$LINKS"
+          args=(--max-posts "${MAX_POSTS:-1}")
+          if [[ "$DRY_RUN" == true ]]; then
+            args+=(--dry-run)
+          elif [[ "$SEED" == true ]]; then
+            python3 repost.py "${state[@]}" --seed
+          fi
+          python3 repost.py "${state[@]}" "${args[@]}" -- "${links[@]}"
